@@ -24,7 +24,7 @@ void onKnobLeftEventCallback(int count, void *usr_data)
 {
     Serial.printf("Detect left event, count is %d\n", count);
     lvgl_port_lock(-1);
-    LVGL_knob_event((void*)KNOB_LEFT);
+    LVGL_knob_event((void*)(intptr_t)KNOB_LEFT);
     lvgl_port_unlock();
 }
 
@@ -32,14 +32,14 @@ void onKnobRightEventCallback(int count, void *usr_data)
 {
     Serial.printf("Detect right event, count is %d\n", count);
     lvgl_port_lock(-1);
-    LVGL_knob_event((void*)KNOB_RIGHT);
+    LVGL_knob_event((void*)(intptr_t)KNOB_RIGHT);
     lvgl_port_unlock();
 }
 
 static void SingleClickCb(void *button_handle, void *usr_data) {
     Serial.println("Button Single Click");
     lvgl_port_lock(-1);
-    LVGL_button_event((void*)BUTTON_SINGLE_CLICK);
+    LVGL_button_event((void*)(intptr_t)BUTTON_SINGLE_CLICK);
     lvgl_port_unlock();
 }
 static void DoubleClickCb(void *button_handle, void *usr_data)
@@ -49,7 +49,7 @@ static void DoubleClickCb(void *button_handle, void *usr_data)
 static void LongPressStartCb(void *button_handle, void *usr_data) {
     Serial.println("Button Long Press Start");
     lvgl_port_lock(-1);
-    LVGL_button_event((void*)BUTTON_LONG_PRESS_START);
+    LVGL_button_event((void*)(intptr_t)BUTTON_LONG_PRESS_START);
     lvgl_port_unlock();
 }
 
@@ -62,12 +62,6 @@ void setup()
     Serial.println("Initialize panel device");
     ESP_Panel *panel = new ESP_Panel();
     panel->init();
-#if LVGL_PORT_AVOID_TEAR
-    // When avoid tearing function is enabled, configure the RGB bus according to the LVGL configuration
-    ESP_PanelBus_RGB *rgb_bus = static_cast<ESP_PanelBus_RGB *>(panel->getLcd()->getBus());
-    rgb_bus->configRgbFrameBufferNumber(LVGL_PORT_DISP_BUFFER_NUM);
-    rgb_bus->configRgbBounceBufferSize(LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE);
-#endif
     panel->begin();
 
     Serial.println("Initialize Knob device");
@@ -120,6 +114,6 @@ void setup()
 
 void loop()
 {
-    Serial.println("IDLE loop");
-    delay(1000);
+    lv_tick_inc(10);
+    delay(10);
 }
