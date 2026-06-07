@@ -1,92 +1,49 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: CC0-1.0
+ * LVGL port for TFT_eSPI
+ * Converted from ESP32_Display_Panel to TFT_eSPI
  */
 #pragma once
 
 #include <Arduino.h>
-#include <ESP_Panel_Library.h>
+#include <TFT_eSPI.h>
 #include <lvgl.h>
 
-// *INDENT-OFF*
+// Display resolution
+#define LVGL_PORT_DISP_WIDTH                    (240)
+#define LVGL_PORT_DISP_HEIGHT                   (240)
+#define LVGL_PORT_TICK_PERIOD_MS                (2)
 
-/**
- * LVGL related parameters, can be adjusted by users
- *
- */
-#define LVGL_PORT_DISP_WIDTH                    (ESP_PANEL_LCD_WIDTH)   // The width of the display
-#define LVGL_PORT_DISP_HEIGHT                   (ESP_PANEL_LCD_HEIGHT)  // The height of the display
-#define LVGL_PORT_TICK_PERIOD_MS                (2) // The period of the LVGL tick task, in milliseconds
-
-/**
- *
- * LVGL buffer related parameters, can be adjusted by users:
- *
- *  (These parameters will be useless if the avoid tearing function is enabled)
- *
- *  - Memory type for buffer allocation:
- *      - MALLOC_CAP_SPIRAM: Allocate LVGL buffer in PSRAM
- *      - MALLOC_CAP_INTERNAL: Allocate LVGL buffer in SRAM
- *
- *      (The SRAM is faster than PSRAM, but the PSRAM has a larger capacity)
- *      (For SPI/QSPI LCD, it is recommended to allocate the buffer in SRAM, because the SPI DMA does not directly support PSRAM now)
- *
- *  - The size (in bytes) and number of buffers:
- *      - Lager buffer size can improve FPS, but it will occupy more memory. Maximum buffer size is `LVGL_PORT_DISP_WIDTH * LVGL_PORT_DISP_HEIGHT`.
- *      - The number of buffers should be 1 or 2.
- *
- */
-#define LVGL_PORT_BUFFER_MALLOC_CAPS            (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)       // Allocate LVGL buffer in SRAM
-// #define LVGL_PORT_BUFFER_MALLOC_CAPS            (MALLOC_CAP_SPIRAM)      // Allocate LVGL buffer in PSRAM
+// Buffer settings
+#define LVGL_PORT_BUFFER_MALLOC_CAPS            (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #define LVGL_PORT_BUFFER_SIZE                   (LVGL_PORT_DISP_WIDTH * 20)
 #define LVGL_PORT_BUFFER_NUM                    (2)
 
-/**
- * LVGL timer handle task related parameters, can be adjusted by users
- *
- */
-#define LVGL_PORT_TASK_MAX_DELAY_MS             (500)       // The maximum delay of the LVGL timer task, in milliseconds
-#define LVGL_PORT_TASK_MIN_DELAY_MS             (2)         // The minimum delay of the LVGL timer task, in milliseconds
-#define LVGL_PORT_TASK_STACK_SIZE               (6 * 1024)  // The stack size of the LVGL timer task, in bytes
-#define LVGL_PORT_TASK_PRIORITY                 (2)         // The priority of the LVGL timer task
+// Task settings
+#define LVGL_PORT_TASK_MAX_DELAY_MS             (500)
+#define LVGL_PORT_TASK_MIN_DELAY_MS             (2)
+#define LVGL_PORT_TASK_STACK_SIZE               (6 * 1024)
+#define LVGL_PORT_TASK_PRIORITY                 (2)
 #define LVGL_PORT_TASK_CORE                     (ARDUINO_RUNNING_CORE)
-                                                            // The core of the LVGL timer task, `-1` means the don't specify the core
-                                                            // Default is the same as the Arduino task
-                                                            // This can be set to `1` only if the SoCs support dual-core,
-                                                            // otherwise it should be set to `-1` or `0`
-
-// *INDENT-OFF*
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * @brief Porting LVGL with LCD and touch panel. This function should be called after the initialization of the LCD and touch panel.
+ * @brief Initialize LVGL with TFT_eSPI display driver
  *
- * @param lcd The pointer to the LCD panel device, mustn't be nullptr
- * @param tp  The pointer to the touch panel device, set to nullptr if is not used
- *
+ * @param tft Pointer to TFT_eSPI instance
  * @return true if success, otherwise false
  */
-bool lvgl_port_init(ESP_PanelLcd *lcd, ESP_PanelTouch *tp);
+bool lvgl_port_init(TFT_eSPI *tft);
 
 /**
- * @brief Lock the LVGL mutex. This function should be called before calling any LVGL APIs when not in LVGL task,
- *        and the `lvgl_port_unlock()` function should be called later.
- *
- * @param timeout_ms The timeout of the mutex lock, in milliseconds. If the timeout is set to `-1`, it will wait indefinitely.
- *
- * @return true if success, otherwise false
+ * @brief Lock the LVGL mutex
  */
 bool lvgl_port_lock(int timeout_ms);
 
 /**
- * @brief Unlock the LVGL mutex. This function should be called after using LVGL APIs when not in LVGL task, and the
- *        `lvgl_port_lock()` function should be called before.
- *
- * @return true if success, otherwise false
+ * @brief Unlock the LVGL mutex
  */
 bool lvgl_port_unlock(void);
 

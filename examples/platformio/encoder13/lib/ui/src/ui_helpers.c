@@ -68,7 +68,7 @@ void _ui_arc_increment(lv_obj_t * target, int val)
 {
     int old = lv_arc_get_value(target);
     lv_arc_set_value(target, old + val);
-    lv_event_send(target, LV_EVENT_VALUE_CHANGED, 0);
+    lv_obj_send_event(target, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 void _ui_bar_increment(lv_obj_t * target, int val, int anm)
@@ -81,7 +81,7 @@ void _ui_slider_increment(lv_obj_t * target, int val, int anm)
 {
     int old = lv_slider_get_value(target);
     lv_slider_set_value(target, old + val, anm);
-    lv_event_send(target, LV_EVENT_VALUE_CHANGED, 0);
+    lv_obj_send_event(target, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 void _ui_keyboard_set_target(lv_obj_t * keyboard, lv_obj_t * textarea)
@@ -304,7 +304,7 @@ void _ui_spinbox_step(lv_obj_t * target, int val)
     else lv_spinbox_decrement(target);
 
 
-    lv_event_send(target, LV_EVENT_VALUE_CHANGED, 0);
+    lv_obj_send_event(target, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 void _ui_switch_theme(int val)

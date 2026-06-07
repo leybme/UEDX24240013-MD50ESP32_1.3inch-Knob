@@ -1,156 +1,91 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: CC0-1.0
+ * LVGL port for TFT_eSPI
+ * Converted from ESP32_Display_Panel to TFT_eSPI
  */
 #include "esp_timer.h"
 #include "lvgl_port_v8.h"
 
 static const char *TAG = "lvgl_port";
-static SemaphoreHandle_t lvgl_mux = nullptr;                  // LVGL mutex
+static SemaphoreHandle_t lvgl_mux = nullptr;
 static TaskHandle_t lvgl_task_handle = nullptr;
 static esp_timer_handle_t lvgl_tick_timer = NULL;
 static void *lvgl_buf[2] = {};
+static TFT_eSPI *_tft = nullptr;
 
 #if !LV_TICK_CUSTOM
 static void tick_increment(void *arg)
 {
-    /* Tell LVGL how many milliseconds have elapsed */
     lv_tick_inc(LVGL_PORT_TICK_PERIOD_MS);
 }
 
 static bool tick_init(void)
 {
-    // Tick interface for LVGL (using esp_timer to generate 2ms periodic event)
     const esp_timer_create_args_t lvgl_tick_timer_args = {
         .callback = &tick_increment,
         .name = "LVGL tick"
     };
-    ESP_PANEL_CHECK_ERR_RET(
-        esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer), false, "Create LVGL tick timer failed"
-    );
-    ESP_PANEL_CHECK_ERR_RET(
-        esp_timer_start_periodic(lvgl_tick_timer, LVGL_PORT_TICK_PERIOD_MS * 1000), false,
-        "Start LVGL tick timer failed"
-    );
-
+    if (esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer) != ESP_OK) {
+        Serial.println("Create LVGL tick timer failed");
+        return false;
+    }
+    if (esp_timer_start_periodic(lvgl_tick_timer, LVGL_PORT_TICK_PERIOD_MS * 1000) != ESP_OK) {
+        Serial.println("Start LVGL tick timer failed");
+        return false;
+    }
     return true;
 }
 
 static bool tick_deinit(void)
 {
-    ESP_PANEL_CHECK_ERR_RET(
-        esp_timer_stop(lvgl_tick_timer), false, "Stop LVGL tick timer failed"
-    );
-    ESP_PANEL_CHECK_ERR_RET(
-        esp_timer_delete(lvgl_tick_timer), false, "Delete LVGL tick timer failed"
-    );
+    if (esp_timer_stop(lvgl_tick_timer) != ESP_OK) {
+        return false;
+    }
+    if (esp_timer_delete(lvgl_tick_timer) != ESP_OK) {
+        return false;
+    }
     return true;
 }
 #endif
 
-/* Flush callback for LVGL 9 */
+/* Flush callback for LVGL - uses TFT_eSPI pushImage */
 static void flush_callback(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
-    ESP_PanelLcd *lcd = (ESP_PanelLcd *)lv_display_get_user_data(disp);
-    const int offsetx1 = area->x1;
-    const int offsetx2 = area->x2;
-    const int offsety1 = area->y1;
-    const int offsety2 = area->y2;
+    uint32_t w = (area->x2 - area->x1 + 1);
+    uint32_t h = (area->y2 - area->y1 + 1);
 
-    lcd->drawBitmap(offsetx1, offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, (const uint8_t *)px_map);
-    // For RGB LCD, directly notify LVGL that the buffer is ready
-    if (lcd->getBus()->getType() == ESP_PANEL_BUS_TYPE_RGB) {
-        lv_display_flush_ready(disp);
-    }
+    _tft->startWrite();
+    _tft->setAddrWindow(area->x1, area->y1, w, h);
+    _tft->pushColors((uint16_t *)px_map, w * h);
+    _tft->endWrite();
+
+    lv_display_flush_ready(disp);
 }
 
-static lv_display_t *display_init(ESP_PanelLcd *lcd)
+static lv_display_t *display_init(TFT_eSPI *tft)
 {
-    ESP_PANEL_CHECK_FALSE_RET(lcd != nullptr, nullptr, "Invalid LCD device");
-    ESP_PANEL_CHECK_FALSE_RET(lcd->getHandle() != nullptr, nullptr, "LCD device is not initialized");
-
-    // Alloc draw buffers used by LVGL
+    // Allocate draw buffers
     int buffer_size = LVGL_PORT_BUFFER_SIZE;
 
-    ESP_LOGD(TAG, "Malloc memory for LVGL buffer");
     for (int i = 0; i < LVGL_PORT_BUFFER_NUM; i++) {
         lvgl_buf[i] = heap_caps_malloc(buffer_size * sizeof(lv_color_t), LVGL_PORT_BUFFER_MALLOC_CAPS);
         assert(lvgl_buf[i]);
-        ESP_LOGD(TAG, "Buffer[%d] address: %p, size: %d", i, lvgl_buf[i], buffer_size * sizeof(lv_color_t));
     }
 
-    ESP_LOGD(TAG, "Create LVGL display");
     lv_display_t *disp = lv_display_create(LVGL_PORT_DISP_WIDTH, LVGL_PORT_DISP_HEIGHT);
-    ESP_PANEL_CHECK_NULL_RET(disp, nullptr, "Create LVGL display failed");
+    if (disp == nullptr) {
+        Serial.println("Create LVGL display failed");
+        return nullptr;
+    }
 
     lv_display_set_flush_cb(disp, flush_callback);
     lv_display_set_buffers(disp, lvgl_buf[0], lvgl_buf[1], buffer_size * sizeof(lv_color_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_display_set_user_data(disp, (void *)lcd);
     lv_display_set_default(disp);
-
-    // Note: Coordinate alignment rounding is handled internally by LVGL 9
-
-    // For non-RGB LCD, need to notify LVGL that the buffer is ready when the refresh is finished
-    auto bus_type = lcd->getBus()->getType();
-    if (bus_type != ESP_PANEL_BUS_TYPE_RGB) {
-        ESP_LOGD(TAG, "Attach refresh finish callback to LCD");
-        lcd->attachDrawBitmapFinishCallback(
-            [](void *user_data) -> bool {
-                lv_display_flush_ready((lv_display_t *)user_data);
-                return false;
-            },
-            (void *)disp
-        );
-    }
 
     return disp;
 }
 
-/* Touchpad read callback for LVGL 9 */
-static void touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
-{
-    ESP_PanelTouch *tp = (ESP_PanelTouch *)lv_indev_get_user_data(indev);
-    ESP_PanelTouchPoint point;
-
-    /* Read data from touch controller */
-    int read_touch_result = tp->readPoints(&point, 1);
-    if (read_touch_result > 0) {
-        data->point.x = point.x;
-        data->point.y = point.y;
-        data->state = LV_INDEV_STATE_PRESSED;
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
-    }
-}
-
-static lv_indev_t *indev_init(ESP_PanelTouch *tp)
-{
-    ESP_PANEL_CHECK_FALSE_RET(tp != nullptr, nullptr, "Invalid touch device");
-    ESP_PANEL_CHECK_FALSE_RET(tp->getHandle() != nullptr, nullptr, "Touch device is not initialized");
-
-    ESP_LOGD(TAG, "Create LVGL input device");
-    lv_indev_t *indev = lv_indev_create();
-    ESP_PANEL_CHECK_NULL_RET(indev, nullptr, "Create LVGL input device failed");
-
-    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-    lv_indev_set_read_cb(indev, touchpad_read);
-    lv_indev_set_user_data(indev, (void *)tp);
-
-    return indev;
-}
-
-IRAM_ATTR bool onDrawBitmapFinishCallback(void *user_data)
-{
-    lv_display_flush_ready((lv_display_t *)user_data);
-
-    return false;
-}
-
 static void lvgl_port_task(void *arg)
 {
-    ESP_LOGD(TAG, "Starting LVGL task");
-
     uint32_t task_delay_ms = LVGL_PORT_TASK_MAX_DELAY_MS;
     while (1) {
         if (lvgl_port_lock(-1)) {
@@ -166,73 +101,144 @@ static void lvgl_port_task(void *arg)
     }
 }
 
-bool lvgl_port_init(ESP_PanelLcd *lcd, ESP_PanelTouch *tp)
+bool lvgl_port_init(TFT_eSPI *tft)
 {
-    ESP_PANEL_CHECK_FALSE_RET(lcd != nullptr, false, "Invalid LCD device");
+    if (tft == nullptr) {
+        Serial.println("Invalid TFT device");
+        return false;
+    }
+
+    _tft = tft;
 
     lv_display_t *disp = nullptr;
-    lv_indev_t *indev = nullptr;
 
     lv_init();
 #if !LV_TICK_CUSTOM
-    ESP_PANEL_CHECK_FALSE_RET(tick_init(), false, "Initialize LVGL tick failed");
+    if (!tick_init()) {
+        Serial.println("Initialize LVGL tick failed");
+        return false;
+    }
 #endif
 
-    ESP_LOGD(TAG, "Initialize LVGL display driver");
-    disp = display_init(lcd);
-    ESP_PANEL_CHECK_NULL_RET(disp, false, "Initialize LVGL display driver failed");
+    // Initialize TFT_eSPI
+    tft->begin();
+    // Vendor init commands for GC9A01 (from UEDX24240013-MD50E board config)
+    tft->writecommand(0xfe);
+    tft->writecommand(0xef);
+    tft->writedata(0x14);
+    tft->writecommand(0x84); tft->writedata(0x60);
+    tft->writecommand(0x85); tft->writedata(0xFF);
+    tft->writecommand(0x86); tft->writedata(0xFF);
+    tft->writecommand(0x87); tft->writedata(0xFF);
+    tft->writecommand(0x8e); tft->writedata(0xFF);
+    tft->writecommand(0x8f); tft->writedata(0xFF);
+    tft->writecommand(0x88); tft->writedata(0x0A);
+    tft->writecommand(0x89); tft->writedata(0x21);
+    tft->writecommand(0x8a); tft->writedata(0x00);
+    tft->writecommand(0x8b); tft->writedata(0x80);
+    tft->writecommand(0x8c); tft->writedata(0x01);
+    tft->writecommand(0x8d); tft->writedata(0x03);
+    tft->writecommand(0xb5); tft->writedata(0x08); tft->writedata(0x09); tft->writedata(0x14); tft->writedata(0x08);
+    tft->writecommand(0xb6); tft->writedata(0x00); tft->writedata(0x00);
+    tft->writecommand(0x36); tft->writedata(0x48);
+    tft->writecommand(0x3a); tft->writedata(0x05);
+    tft->writecommand(0x90); tft->writedata(0x08); tft->writedata(0x08); tft->writedata(0x08); tft->writedata(0x08);
+    tft->writecommand(0xbd); tft->writedata(0x06);
+    tft->writecommand(0xba); tft->writedata(0x01);
+    tft->writecommand(0xbc); tft->writedata(0x00);
+    tft->writecommand(0xff); tft->writedata(0x60); tft->writedata(0x01); tft->writedata(0x04);
+    tft->writecommand(0xc3); tft->writedata(0x13);
+    tft->writecommand(0xc4); tft->writedata(0x13);
+    tft->writecommand(0xc9); tft->writedata(0x25);
+    tft->writecommand(0xbe); tft->writedata(0x11);
+    tft->writecommand(0xe1); tft->writedata(0x10); tft->writedata(0x0e);
+    tft->writecommand(0xdf); tft->writedata(0x21); tft->writedata(0x0c); tft->writedata(0x02);
+    tft->writecommand(0xf0); tft->writedata(0x45); tft->writedata(0x09); tft->writedata(0x08); tft->writedata(0x08); tft->writedata(0x26); tft->writedata(0x2a);
+    tft->writecommand(0xf1); tft->writedata(0x43); tft->writedata(0x70); tft->writedata(0x72); tft->writedata(0x36); tft->writedata(0x37); tft->writedata(0x6f);
+    tft->writecommand(0xf2); tft->writedata(0x45); tft->writedata(0x09); tft->writedata(0x08); tft->writedata(0x08); tft->writedata(0x26); tft->writedata(0x2a);
+    tft->writecommand(0xf3); tft->writedata(0x43); tft->writedata(0x70); tft->writedata(0x72); tft->writedata(0x36); tft->writedata(0x37); tft->writedata(0x6f);
+    tft->writecommand(0xed); tft->writedata(0x1b); tft->writedata(0x0b);
+    tft->writecommand(0xae); tft->writedata(0x77);
+    tft->writecommand(0xcd); tft->writedata(0x63);
+    tft->writecommand(0x70); tft->writedata(0x07); tft->writedata(0x07); tft->writedata(0x04); tft->writedata(0x0e); tft->writedata(0x0f); tft->writedata(0x09); tft->writedata(0x07); tft->writedata(0x08); tft->writedata(0x03);
+    tft->writecommand(0xe8); tft->writedata(0x34);
+    tft->writecommand(0x62); tft->writedata(0x18); tft->writedata(0x0d); tft->writedata(0x71); tft->writedata(0xed); tft->writedata(0x70); tft->writedata(0x70); tft->writedata(0x18); tft->writedata(0x0f); tft->writedata(0x71); tft->writedata(0xef); tft->writedata(0x70); tft->writedata(0x70);
+    tft->writecommand(0x63); tft->writedata(0x18); tft->writedata(0x11); tft->writedata(0x71); tft->writedata(0xf1); tft->writedata(0x70); tft->writedata(0x70); tft->writedata(0x18); tft->writedata(0x13); tft->writedata(0x71); tft->writedata(0xf3); tft->writedata(0x70); tft->writedata(0x70);
+    tft->writecommand(0x64); tft->writedata(0x28); tft->writedata(0x29); tft->writedata(0xf1); tft->writedata(0x01); tft->writedata(0xf1); tft->writedata(0x00); tft->writedata(0x07);
+    tft->writecommand(0x66); tft->writedata(0x3c); tft->writedata(0x00); tft->writedata(0xcd); tft->writedata(0x67); tft->writedata(0x45); tft->writedata(0x45); tft->writedata(0x10); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0x00);
+    tft->writecommand(0x67); tft->writedata(0x00); tft->writedata(0x3c); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0x01); tft->writedata(0x54); tft->writedata(0x10); tft->writedata(0x32); tft->writedata(0x98);
+    tft->writecommand(0x74); tft->writedata(0x10); tft->writedata(0x85); tft->writedata(0x80); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0x4e); tft->writedata(0x00);
+    tft->writecommand(0x98); tft->writedata(0x3e); tft->writedata(0x07);
+    tft->writecommand(0x99); tft->writedata(0x3e); tft->writedata(0x07);
+    tft->writecommand(0x35); tft->writedata(0x00);
+    tft->writecommand(0x44); tft->writedata(0x00); tft->writedata(0x4a);
+    tft->writecommand(0x21);
+    // Set address window
+    tft->writecommand(0x2a); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0xef);
+    tft->writecommand(0x2b); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0x00); tft->writedata(0xef);
+    tft->writecommand(0x2c);
+    // Sleep out + display on
+    tft->writecommand(0x11);
+    delay(120);
+    tft->writecommand(0x29);
+    delay(20);
 
-    // Set the default display rotation
-    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_0);
+    // Set rotation - original had MIRROR_X=1, MIRROR_Y=0, SWAP_XY=0
+    // The vendor MADCTL 0x36 = 0x48 already sets MX and BGR
+    tft->setRotation(0);
 
-    if (tp != nullptr) {
-        ESP_LOGD(TAG, "Initialize LVGL input driver");
-        indev = indev_init(tp);
-        ESP_PANEL_CHECK_NULL_RET(indev, false, "Initialize LVGL input driver failed");
+    Serial.println("Initialize LVGL display driver");
+    disp = display_init(tft);
+    if (disp == nullptr) {
+        Serial.println("Initialize LVGL display driver failed");
+        return false;
     }
 
-    ESP_LOGD(TAG, "Create mutex for LVGL");
-    lvgl_mux = xSemaphoreCreateRecursiveMutex();
-    ESP_PANEL_CHECK_NULL_RET(lvgl_mux, false, "Create LVGL mutex failed");
+    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_0);
 
-    ESP_LOGD(TAG, "Create LVGL task");
+    lvgl_mux = xSemaphoreCreateRecursiveMutex();
+    if (lvgl_mux == nullptr) {
+        Serial.println("Create LVGL mutex failed");
+        return false;
+    }
+
     BaseType_t core_id = (LVGL_PORT_TASK_CORE < 0) ? tskNO_AFFINITY : LVGL_PORT_TASK_CORE;
     BaseType_t ret = xTaskCreatePinnedToCore(lvgl_port_task, "lvgl", LVGL_PORT_TASK_STACK_SIZE, NULL,
                      LVGL_PORT_TASK_PRIORITY, &lvgl_task_handle, core_id);
-    ESP_PANEL_CHECK_FALSE_RET(ret == pdPASS, false, "Create LVGL task failed");
+    if (ret != pdPASS) {
+        Serial.println("Create LVGL task failed");
+        return false;
+    }
 
     return true;
 }
 
 bool lvgl_port_lock(int timeout_ms)
 {
-    ESP_PANEL_CHECK_NULL_RET(lvgl_mux, false, "LVGL mutex is not initialized");
-
+    if (lvgl_mux == nullptr) return false;
     const TickType_t timeout_ticks = (timeout_ms < 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
     return (xSemaphoreTakeRecursive(lvgl_mux, timeout_ticks) == pdTRUE);
 }
 
 bool lvgl_port_unlock(void)
 {
-    ESP_PANEL_CHECK_NULL_RET(lvgl_mux, false, "LVGL mutex is not initialized");
-
+    if (lvgl_mux == nullptr) return false;
     xSemaphoreGiveRecursive(lvgl_mux);
-
     return true;
 }
 
 bool lvgl_port_deinit(void)
 {
 #if !LV_TICK_CUSTOM
-    ESP_PANEL_CHECK_FALSE_RET(tick_deinit(), false, "Deinitialize LVGL tick failed");
+    if (!tick_deinit()) return false;
 #endif
 
-    ESP_PANEL_CHECK_FALSE_RET(lvgl_port_lock(-1), false, "Lock LVGL failed");
+    if (!lvgl_port_lock(-1)) return false;
     if (lvgl_task_handle != nullptr) {
         vTaskDelete(lvgl_task_handle);
         lvgl_task_handle = nullptr;
     }
-    ESP_PANEL_CHECK_FALSE_RET(lvgl_port_unlock(), false, "Unlock LVGL failed");
+    if (!lvgl_port_unlock()) return false;
 
     lv_deinit();
     for (int i = 0; i < LVGL_PORT_BUFFER_NUM; i++) {
